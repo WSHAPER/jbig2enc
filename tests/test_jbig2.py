@@ -154,6 +154,61 @@ class TestJbig2SymbolMode(unittest.TestCase):
         proc = _run("-s", "-w", "0.6", TEST_IMAGE_PNG)
         self.assertEqual(proc.returncode, 0)
 
+    def test_emit_json(self):
+        """--emit-json (with -s) writes a glyph provenance sidecar."""
+        import json
+
+        _require_image(TEST_IMAGE_PNG)
+        with tempfile.TemporaryDirectory() as tmp:
+            sidecar = Path(tmp) / "provenance.json"
+            proc = _run_cwd(
+                tmp,
+                "--emit-json",
+                sidecar,
+                "-s",
+                "-p",
+                str(TEST_IMAGE_PNG),
+            )
+            self.assertEqual(proc.returncode, 0, proc.stderr.decode())
+            self.assertTrue(sidecar.is_file(), "sidecar missing")
+            data = json.loads(sidecar.read_text())
+
+            self.assertEqual(data["version"], 1)
+            self.assertEqual(data["num_pages"], 1)
+            self.assertEqual(len(data["pages"]), 1)
+            page = data["pages"][0]
+            self.assertGreater(page["width"], 0)
+            self.assertGreater(page["height"], 0)
+            self.assertGreater(page["xres"], 0)
+
+            self.assertEqual(data["num_symbols"], len(data["symbols"]))
+            self.assertEqual(data["num_instances"], len(data["instances"]))
+            self.assertGreater(data["num_symbols"], 0)
+            self.assertGreater(data["num_instances"], 0)
+
+            heights = {s["class"]: s["height"] for s in data["symbols"]}
+            for sym in data["symbols"]:
+                self.assertGreater(sym["width"], 0)
+                self.assertGreater(sym["height"], 0)
+            for inst in data["instances"]:
+                self.assertIn(inst["class"], heights)
+                self.assertEqual(inst["page"], 1)
+                # ul and ll are the corners of the placement box in raster
+                # coordinates (origin at the top left, y down)
+                self.assertGreaterEqual(inst["ll"][1], inst["ul"][1])
+                self.assertAlmostEqual(
+                    inst["ll"][1] - inst["ul"][1], heights[inst["class"]], delta=2
+                )
+                self.assertLessEqual(inst["ll"][0], page["width"])
+                self.assertLessEqual(inst["ll"][1], page["height"])
+
+    def test_emit_json_requires_symbol_mode(self):
+        """--emit-json without -s is rejected."""
+        _require_image(TEST_IMAGE_PNG)
+        proc = _run("--emit-json", "-", str(TEST_IMAGE_PNG))
+        self.assertNotEqual(proc.returncode, 0)
+        self.assertIn("symbol mode", proc.stderr.decode())
+
 
 class TestJbig2DuplicateLineRemoval(unittest.TestCase):
     """TPGD duplicate-line-removal flag."""

@@ -16,6 +16,7 @@
 // limitations under the License.
 
 #include <map>
+#include <string>
 #include <list>
 #include <vector>
 #include <algorithm>
@@ -995,5 +996,103 @@ jbig2_encode_generic(struct Pix *const bw, const bool full_headers, const int xr
 
   *length = offset;
 
+  return ret;
+}
+
+// -----------------------------------------------------------------------------
+// Serialize the glyph provenance computed by the classifier as JSON.
+//
+// The classifier retains, for every component instance, the class it was
+// assigned to and the corner at which the class template is placed. This
+// information is consumed into the arithmetic-coded text regions and lost to
+// callers. jbig2enc_emit_json writes it out as a sidecar so that downstream
+// tools can use the encoder as a glyph clustering layer.
+//
+// Call after jbig2_pages_complete, which orders the placements and merges
+// duplicate templates. All coordinates are raster coordinates of the page at
+// encode resolution: x is measured from the left edge, y from the top edge.
+// "ul" is the upper left corner of the template placement, "ll" the lower
+// left corner of the ink, which is the placement used by the JBIG2 text
+// region coder.
+//
+// WARNING: returns a malloced buffer which the caller must free
+// -----------------------------------------------------------------------------
+uint8_t *
+jbig2enc_emit_json(struct jbig2ctx *ctx, int *const length) {
+  static const int kJsonBorderSize = 6;  // must match kBorderSize in jbig2sym.cc
+  std::string out;
+  out.reserve(4096);
+  char buf[96];
+
+#define JSON_PRINTF(...)                     \
+  do {                                       \
+    snprintf(buf, sizeof(buf), __VA_ARGS__); \
+    out += buf;                              \
+  } while (0)
+
+  const JBCLASSER *classer = ctx->classer;
+  PIXA *const templates = ctx->avg_templates ? ctx->avg_templates : classer->pixat;
+  const int nclass = templates->n;
+  const int ncomp = classer->naclass->n;
+
+  out += "{\n  \"version\": 1,\n";
+  JSON_PRINTF("  \"num_pages\": %d,\n", classer->npages);
+  JSON_PRINTF("  \"num_symbols\": %d,\n", nclass);
+  JSON_PRINTF("  \"num_instances\": %d,\n", ncomp);
+
+  out += "  \"pages\": [\n";
+  for (int p = 0; p < classer->npages; ++p) {
+    JSON_PRINTF(
+        "    {\"page\": %d, \"width\": %d, \"height\": %d, "
+        "\"xres\": %d, \"yres\": %d}%s\n",
+        p + 1,
+        ctx->page_width[p],
+        ctx->page_height[p],
+        ctx->page_xres[p],
+        ctx->page_yres[p],
+        p + 1 < classer->npages ? "," : "");
+  }
+  out += "  ],\n";
+
+  // The templates in classer->pixat carry the Leptonica border; the averaged
+  // templates used with hash-based thresholding do not.
+  const int border = ctx->avg_templates ? 0 : 2 * kJsonBorderSize;
+  out += "  \"symbols\": [\n";
+  for (int c = 0; c < nclass; ++c) {
+    JSON_PRINTF("    {\"class\": %d, \"width\": %d, \"height\": %d}%s\n",
+                c,
+                templates->pix[c]->w - border,
+                templates->pix[c]->h - border,
+                c + 1 < nclass ? "," : "");
+  }
+  out += "  ],\n";
+
+  out += "  \"instances\": [\n";
+  for (int i = 0; i < ncomp; ++i) {
+    l_int32 cls, page;
+    l_float32 ulx, uly, llx, lly;
+    numaGetIValue(classer->naclass, i, &cls);
+    numaGetIValue(classer->napage, i, &page);
+    ptaGetPt(classer->ptaul, i, &ulx, &uly);
+    ptaGetPt(classer->ptall, i, &llx, &lly);
+    JSON_PRINTF(
+        "    {\"class\": %d, \"page\": %d, "
+        "\"ul\": [%d, %d], \"ll\": [%d, %d]}%s\n",
+        cls,
+        page + 1,
+        lrintf(ulx),
+        lrintf(uly),
+        lrintf(llx),
+        lrintf(lly),
+        i + 1 < ncomp ? "," : "");
+  }
+  out += "  ]\n}\n";
+
+#undef JSON_PRINTF
+
+  *length = static_cast<int>(out.size());
+  uint8_t *const ret = static_cast<uint8_t *>(malloc(out.size()));
+  if (! ret) abort();
+  memcpy(ret, out.data(), out.size());
   return ret;
 }
