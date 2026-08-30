@@ -22,6 +22,7 @@
 #include <algorithm>
 
 #include <stdio.h>
+#include <stdarg.h>
 #include <string.h>
 
 #include <leptonica/allheaders.h>
@@ -1017,18 +1018,33 @@ jbig2_encode_generic(struct Pix *const bw, const bool full_headers, const int xr
 //
 // WARNING: returns a malloced buffer which the caller must free
 // -----------------------------------------------------------------------------
+// Append formatted output to a std::string, growing past the stack buffer
+// when a formatted line does not fit (e.g. very large page dimensions or
+// coordinates).
+static void
+json_appendf(std::string *out, const char *fmt, ...) {
+  char stack_buf[96];
+  va_list ap;
+  va_start(ap, fmt);
+  const int needed = vsnprintf(stack_buf, sizeof(stack_buf), fmt, ap);
+  va_end(ap);
+  if (needed < 0) abort();
+  if (static_cast<size_t>(needed) < sizeof(stack_buf)) {
+    out->append(stack_buf, needed);
+    return;
+  }
+  std::vector<char> heap_buf(needed + 1);
+  va_start(ap, fmt);
+  vsnprintf(heap_buf.data(), heap_buf.size(), fmt, ap);
+  va_end(ap);
+  out->append(heap_buf.data(), needed);
+}
+
 uint8_t *
 jbig2enc_emit_json(struct jbig2ctx *ctx, int *const length) {
   static const int kJsonBorderSize = 6;  // must match kBorderSize in jbig2sym.cc
   std::string out;
   out.reserve(4096);
-  char buf[96];
-
-#define JSON_PRINTF(...)                     \
-  do {                                       \
-    snprintf(buf, sizeof(buf), __VA_ARGS__); \
-    out += buf;                              \
-  } while (0)
 
   const JBCLASSER *classer = ctx->classer;
   PIXA *const templates = ctx->avg_templates ? ctx->avg_templates : classer->pixat;
@@ -1036,21 +1052,21 @@ jbig2enc_emit_json(struct jbig2ctx *ctx, int *const length) {
   const int ncomp = classer->naclass->n;
 
   out += "{\n  \"version\": 1,\n";
-  JSON_PRINTF("  \"num_pages\": %d,\n", classer->npages);
-  JSON_PRINTF("  \"num_symbols\": %d,\n", nclass);
-  JSON_PRINTF("  \"num_instances\": %d,\n", ncomp);
+  json_appendf(&out, "  \"num_pages\": %d,\n", classer->npages);
+  json_appendf(&out, "  \"num_symbols\": %d,\n", nclass);
+  json_appendf(&out, "  \"num_instances\": %d,\n", ncomp);
 
   out += "  \"pages\": [\n";
   for (int p = 0; p < classer->npages; ++p) {
-    JSON_PRINTF(
-        "    {\"page\": %d, \"width\": %d, \"height\": %d, "
-        "\"xres\": %d, \"yres\": %d}%s\n",
-        p + 1,
-        ctx->page_width[p],
-        ctx->page_height[p],
-        ctx->page_xres[p],
-        ctx->page_yres[p],
-        p + 1 < classer->npages ? "," : "");
+    json_appendf(&out,
+                 "    {\"page\": %d, \"width\": %d, \"height\": %d, "
+                 "\"xres\": %d, \"yres\": %d}%s\n",
+                 p + 1,
+                 ctx->page_width[p],
+                 ctx->page_height[p],
+                 ctx->page_xres[p],
+                 ctx->page_yres[p],
+                 p + 1 < classer->npages ? "," : "");
   }
   out += "  ],\n";
 
@@ -1059,11 +1075,12 @@ jbig2enc_emit_json(struct jbig2ctx *ctx, int *const length) {
   const int border = ctx->avg_templates ? 0 : 2 * kJsonBorderSize;
   out += "  \"symbols\": [\n";
   for (int c = 0; c < nclass; ++c) {
-    JSON_PRINTF("    {\"class\": %d, \"width\": %d, \"height\": %d}%s\n",
-                c,
-                templates->pix[c]->w - border,
-                templates->pix[c]->h - border,
-                c + 1 < nclass ? "," : "");
+    json_appendf(&out,
+                 "    {\"class\": %d, \"width\": %d, \"height\": %d}%s\n",
+                 c,
+                 templates->pix[c]->w - border,
+                 templates->pix[c]->h - border,
+                 c + 1 < nclass ? "," : "");
   }
   out += "  ],\n";
 
@@ -1075,20 +1092,18 @@ jbig2enc_emit_json(struct jbig2ctx *ctx, int *const length) {
     numaGetIValue(classer->napage, i, &page);
     ptaGetPt(classer->ptaul, i, &ulx, &uly);
     ptaGetPt(classer->ptall, i, &llx, &lly);
-    JSON_PRINTF(
-        "    {\"class\": %d, \"page\": %d, "
-        "\"ul\": [%d, %d], \"ll\": [%d, %d]}%s\n",
-        cls,
-        page + 1,
-        lrintf(ulx),
-        lrintf(uly),
-        lrintf(llx),
-        lrintf(lly),
-        i + 1 < ncomp ? "," : "");
+    json_appendf(&out,
+                 "    {\"class\": %d, \"page\": %d, "
+                 "\"ul\": [%d, %d], \"ll\": [%d, %d]}%s\n",
+                 cls,
+                 page + 1,
+                 lrintf(ulx),
+                 lrintf(uly),
+                 lrintf(llx),
+                 lrintf(lly),
+                 i + 1 < ncomp ? "," : "");
   }
   out += "  ]\n}\n";
-
-#undef JSON_PRINTF
 
   *length = static_cast<int>(out.size());
   uint8_t *const ret = static_cast<uint8_t *>(malloc(out.size()));

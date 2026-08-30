@@ -619,7 +619,12 @@ main(int argc, char **argv) {
     ret = jbig2enc_emit_json(ctx, &length);
     const int fd = open(emit_json, O_WRONLY | O_TRUNC | O_CREAT | WINBINARY, 0600);
     if (fd < 0) abort();
-    write(fd, ret, length);
+    if (write(fd, ret, length) != length) {
+      fprintf(stderr, "Failed to write \"%s\"\n", emit_json);
+      close(fd);
+      free(ret);
+      return 1;
+    }
     close(fd);
     free(ret);
   }
