@@ -159,6 +159,7 @@ class TestJbig2SymbolMode(unittest.TestCase):
         import json
 
         _require_image(TEST_IMAGE_PNG)
+        _require_image(TEST_IMAGE_JPG)
         with tempfile.TemporaryDirectory() as tmp:
             sidecar = Path(tmp) / "provenance.json"
             proc = _run_cwd(
@@ -168,31 +169,43 @@ class TestJbig2SymbolMode(unittest.TestCase):
                 "-s",
                 "-p",
                 str(TEST_IMAGE_PNG),
+                str(TEST_IMAGE_JPG),
             )
             self.assertEqual(proc.returncode, 0, proc.stderr.decode())
             self.assertTrue(sidecar.is_file(), "sidecar missing")
             data = json.loads(sidecar.read_text())
 
             self.assertEqual(data["version"], 1)
-            self.assertEqual(data["num_pages"], 1)
-            self.assertEqual(len(data["pages"]), 1)
-            page = data["pages"][0]
-            self.assertGreater(page["width"], 0)
-            self.assertGreater(page["height"], 0)
-            self.assertGreater(page["xres"], 0)
+
+            # two input images: page association and per-page geometry must
+            # both survive (a regression that assigns everything to page 1
+            # or copies page 1's geometry must fail here)
+            self.assertEqual(data["num_pages"], 2)
+            self.assertEqual(len(data["pages"]), 2)
+            self.assertEqual([p["page"] for p in data["pages"]], [1, 2])
+            from PIL import Image as PILImage
+
+            for page, image in zip(data["pages"], (TEST_IMAGE_PNG, TEST_IMAGE_JPG)):
+                width, height = PILImage.open(str(image)).size
+                self.assertEqual(page["width"], width)
+                self.assertEqual(page["height"], height)
+                self.assertGreater(page["xres"], 0)
 
             self.assertEqual(data["num_symbols"], len(data["symbols"]))
             self.assertEqual(data["num_instances"], len(data["instances"]))
             self.assertGreater(data["num_symbols"], 0)
             self.assertGreater(data["num_instances"], 0)
+            seen_pages = {inst["page"] for inst in data["instances"]}
+            self.assertEqual(seen_pages, {1, 2})
 
+            page_by_id = {p["page"]: p for p in data["pages"]}
             heights = {s["class"]: s["height"] for s in data["symbols"]}
             for sym in data["symbols"]:
                 self.assertGreater(sym["width"], 0)
                 self.assertGreater(sym["height"], 0)
             for inst in data["instances"]:
                 self.assertIn(inst["class"], heights)
-                self.assertEqual(inst["page"], 1)
+                page = page_by_id[inst["page"]]
                 # ul and ll are the corners of the placement box in raster
                 # coordinates (origin at the top left, y down)
                 self.assertGreaterEqual(inst["ll"][1], inst["ul"][1])

@@ -750,8 +750,13 @@ jbig2_produce_page(struct jbig2ctx *ctx, int page_no,
   seg.len = sizeof(struct jbig2_page_info);
   pageinfo.width = htonl(ctx->page_width[page_no]);
   pageinfo.height = htonl(ctx->page_height[page_no]);
-  pageinfo.xres = htonl(xres == -1 ? ctx->page_xres[page_no] : xres );
-  pageinfo.yres = htonl(yres == -1 ? ctx->page_yres[page_no] : yres );
+  // Persist per-page resolution overrides so later serialization of the
+  // document state (jbig2enc_emit_json) reports the resolutions that were
+  // actually encoded, not the ones captured when the page was added.
+  if (xres != -1) ctx->page_xres[page_no] = xres;
+  if (yres != -1) ctx->page_yres[page_no] = yres;
+  pageinfo.xres = htonl(ctx->page_xres[page_no]);
+  pageinfo.yres = htonl(ctx->page_yres[page_no]);
   pageinfo.is_lossless = ctx->refinement;
 
   std::map<int, int> second_symbol_map;
@@ -1010,11 +1015,12 @@ jbig2_encode_generic(struct Pix *const bw, const bool full_headers, const int xr
 // tools can use the encoder as a glyph clustering layer.
 //
 // Call after jbig2_pages_complete, which orders the placements and merges
-// duplicate templates. All coordinates are raster coordinates of the page at
-// encode resolution: x is measured from the left edge, y from the top edge.
-// "ul" is the upper left corner of the template placement, "ll" the lower
-// left corner of the ink, which is the placement used by the JBIG2 text
-// region coder.
+// duplicate templates, and after all jbig2_produce_page calls, so that any
+// per-page resolution overrides are reflected. All coordinates are raster
+// coordinates of the page at encode resolution: x is measured from the left
+// edge, y from the top edge. "ul" is the upper left corner of the template
+// placement, "ll" the lower left corner of the ink, which is the placement
+// used by the JBIG2 text region coder.
 //
 // WARNING: returns a malloced buffer which the caller must free
 // -----------------------------------------------------------------------------

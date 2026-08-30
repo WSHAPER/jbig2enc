@@ -615,20 +615,6 @@ main(int argc, char **argv) {
   }
   free(ret);
 
-  if (emit_json) {
-    ret = jbig2enc_emit_json(ctx, &length);
-    const int fd = open(emit_json, O_WRONLY | O_TRUNC | O_CREAT | WINBINARY, 0600);
-    if (fd < 0) abort();
-    if (write(fd, ret, length) != length) {
-      fprintf(stderr, "Failed to write \"%s\"\n", emit_json);
-      close(fd);
-      free(ret);
-      return 1;
-    }
-    close(fd);
-    free(ret);
-  }
-
   for (int i = 0; i < num_pages; ++i) {
     ret = jbig2_produce_page(ctx, i, -1, -1, &length);
     if (pdfmode) {
@@ -640,6 +626,22 @@ main(int argc, char **argv) {
     } else {
       write(1, ret, length);
     }
+    free(ret);
+  }
+
+  // Emitted after the page loop so per-page resolution overrides (library
+  // callers only; the CLI always passes -1) are reflected.
+  if (emit_json) {
+    ret = jbig2enc_emit_json(ctx, &length);
+    const int fd = open(emit_json, O_WRONLY | O_TRUNC | O_CREAT | WINBINARY, 0600);
+    if (fd < 0) abort();
+    if (write(fd, ret, length) != length) {
+      fprintf(stderr, "Failed to write \"%s\"\n", emit_json);
+      close(fd);
+      free(ret);
+      return 1;
+    }
+    close(fd);
     free(ret);
   }
 
