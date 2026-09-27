@@ -57,6 +57,36 @@ def _require_image(path: Path):
         raise unittest.SkipTest(f"test image not found: {path}")
 
 
+def _image_size(path):
+    """Read (width, height) from a PNG or JPEG header, stdlib only."""
+    import struct
+
+    data = Path(path).read_bytes()
+    if data[:8] == b"\x89PNG\r\n\x1a\n":
+        width, height = struct.unpack(">II", data[16:24])
+        return width, height
+    if data[:2] == b"\xff\xd8":
+        # JPEG: scan the marker segments for a frame header (SOFn)
+        i = 2
+        while i + 9 < len(data):
+            if data[i] != 0xFF:
+                i += 1
+                continue
+            marker = data[i + 1]
+            if marker in (
+                0xC0, 0xC1, 0xC2, 0xC3, 0xC5, 0xC6, 0xC7,
+                0xC9, 0xCA, 0xCB, 0xCD, 0xCE, 0xCF,
+            ):
+                height, width = struct.unpack(">HH", data[i + 5 : i + 9])
+                return width, height
+            if marker in (0xD8, 0xD9) or 0xD0 <= marker <= 0xD7:
+                i += 2
+                continue
+            seg_len = struct.unpack(">H", data[i + 2 : i + 4])[0]
+            i += 2 + seg_len
+    raise ValueError(f"unsupported image: {path}")
+
+
 JBIG2_MAGIC = b"\x97\x4a\x42\x32\x0d\x0a\x1a\x0a"
 
 
@@ -183,10 +213,9 @@ class TestJbig2SymbolMode(unittest.TestCase):
             self.assertEqual(data["num_pages"], 2)
             self.assertEqual(len(data["pages"]), 2)
             self.assertEqual([p["page"] for p in data["pages"]], [1, 2])
-            from PIL import Image as PILImage
 
             for page, image in zip(data["pages"], (TEST_IMAGE_PNG, TEST_IMAGE_JPG)):
-                width, height = PILImage.open(str(image)).size
+                width, height = _image_size(str(image))
                 self.assertEqual(page["width"], width)
                 self.assertEqual(page["height"], height)
                 self.assertGreater(page["xres"], 0)
