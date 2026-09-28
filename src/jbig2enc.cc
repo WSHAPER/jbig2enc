@@ -1005,28 +1005,12 @@ jbig2_encode_generic(struct Pix *const bw, const bool full_headers, const int xr
   return ret;
 }
 
-// -----------------------------------------------------------------------------
-// Serialize the glyph provenance computed by the classifier as JSON.
-//
-// The classifier retains, for every component instance, the class it was
-// assigned to and the corner at which the class template is placed. This
-// information is consumed into the arithmetic-coded text regions and lost to
-// callers. jbig2enc_emit_json writes it out as a sidecar so that downstream
-// tools can use the encoder as a glyph clustering layer.
-//
-// Call after jbig2_pages_complete, which orders the placements and merges
-// duplicate templates, and after all jbig2_produce_page calls, so that any
-// per-page resolution overrides are reflected. All coordinates are raster
-// coordinates of the page at encode resolution: x is measured from the left
-// edge, y from the top edge. "ul" is the upper left corner of the template
-// placement, "ll" the lower left corner of the ink, which is the placement
-// used by the JBIG2 text region coder.
-//
-// WARNING: returns a malloced buffer which the caller must free
-// -----------------------------------------------------------------------------
 // Append formatted output to a std::string, growing past the stack buffer
 // when a formatted line does not fit (e.g. very large page dimensions or
 // coordinates).
+#if defined(__GNUC__)
+__attribute__((format(printf, 2, 3)))
+#endif
 static void
 json_appendf(std::string *out, const char *fmt, ...) {
   char stack_buf[96];
@@ -1046,13 +1030,48 @@ json_appendf(std::string *out, const char *fmt, ...) {
   out->append(heap_buf.data(), needed);
 }
 
+// -----------------------------------------------------------------------------
+// Serialize the glyph provenance computed by the classifier as JSON.
+//
+// The classifier retains, for every component instance, the class it was
+// assigned to and the corner at which the class template is placed. This
+// information is consumed into the arithmetic-coded text regions and lost to
+// callers. jbig2enc_emit_json writes it out as a sidecar so that downstream
+// tools can use the encoder as a glyph clustering layer.
+//
+// Call after jbig2_pages_complete, which orders the placements and merges
+// duplicate templates, and after all jbig2_produce_page calls, so that any
+// per-page resolution overrides are reflected; the ordering of calls before
+// that point is undefined. All coordinates are raster coordinates of the page
+// at encode resolution: x is measured from the left edge, y from the top
+// edge. "ul" is the upper left corner of the template placement, "ll" the
+// lower left corner of the ink, which is the placement used by the JBIG2 text
+// region coder.
+//
+// Returns NULL on invalid state (no symbol mode data, inconsistent page
+// bookkeeping, or an unreadable classifier entry) or on allocation failure;
+// *length is then untouched.
+//
+// WARNING: returns a malloced buffer which the caller must free
+// -----------------------------------------------------------------------------
 uint8_t *
 jbig2enc_emit_json(struct jbig2ctx *ctx, int *const length) {
-  static const int kJsonBorderSize = 6;  // must match kBorderSize in jbig2sym.cc
+  // The classifier is only created in symbol mode; jbig2_init does not
+  // validate its arguments, so classer can be NULL here.
+  if (ctx->classer == NULL) return NULL;
+  const JBCLASSER *classer = ctx->classer;
+  // page_width/height/xres/yres are appended in lockstep with the
+  // classifier's page count by jbig2_add_page; disagreement would index the
+  // vectors below out of bounds.
+  if (static_cast<size_t>(classer->npages) != ctx->page_width.size() ||
+      static_cast<size_t>(classer->npages) != ctx->page_height.size() ||
+      static_cast<size_t>(classer->npages) != ctx->page_xres.size() ||
+      static_cast<size_t>(classer->npages) != ctx->page_yres.size())
+    return NULL;
+
   std::string out;
   out.reserve(4096);
 
-  const JBCLASSER *classer = ctx->classer;
   PIXA *const templates = ctx->avg_templates ? ctx->avg_templates : classer->pixat;
   const int nclass = templates->n;
   const int ncomp = classer->naclass->n;
@@ -1078,7 +1097,7 @@ jbig2enc_emit_json(struct jbig2ctx *ctx, int *const length) {
 
   // The templates in classer->pixat carry the Leptonica border; the averaged
   // templates used with hash-based thresholding do not.
-  const int border = ctx->avg_templates ? 0 : 2 * kJsonBorderSize;
+  const int border = ctx->avg_templates ? 0 : 2 * kBorderSize;
   out += "  \"symbols\": [\n";
   for (int c = 0; c < nclass; ++c) {
     json_appendf(&out,
@@ -1094,26 +1113,27 @@ jbig2enc_emit_json(struct jbig2ctx *ctx, int *const length) {
   for (int i = 0; i < ncomp; ++i) {
     l_int32 cls, page;
     l_float32 ulx, uly, llx, lly;
-    numaGetIValue(classer->naclass, i, &cls);
-    numaGetIValue(classer->napage, i, &page);
-    ptaGetPt(classer->ptaul, i, &ulx, &uly);
-    ptaGetPt(classer->ptall, i, &llx, &lly);
+    // the leptonica accessors return 0 on success and 1 on error
+    if (numaGetIValue(classer->naclass, i, &cls) || numaGetIValue(classer->napage, i, &page) ||
+        ptaGetPt(classer->ptaul, i, &ulx, &uly) || ptaGetPt(classer->ptall, i, &llx, &lly))
+      return NULL;
     json_appendf(&out,
                  "    {\"class\": %d, \"page\": %d, "
                  "\"ul\": [%d, %d], \"ll\": [%d, %d]}%s\n",
                  cls,
                  page + 1,
-                 lrintf(ulx),
-                 lrintf(uly),
-                 lrintf(llx),
-                 lrintf(lly),
+                 (int) lrintf(ulx),
+                 (int) lrintf(uly),
+                 (int) lrintf(llx),
+                 (int) lrintf(lly),
                  i + 1 < ncomp ? "," : "");
   }
   out += "  ]\n}\n";
 
-  *length = static_cast<int>(out.size());
   uint8_t *const ret = static_cast<uint8_t *>(malloc(out.size()));
-  if (! ret) abort();
+  if (! ret) return NULL;
   memcpy(ret, out.data(), out.size());
+  // *length is an int by API convention; >INT_MAX output (pathological pages) would be truncated.
+  *length = static_cast<int>(out.size());
   return ret;
 }
