@@ -633,13 +633,29 @@ main(int argc, char **argv) {
   // callers only; the CLI always passes -1) are reflected.
   if (emit_json) {
     ret = jbig2enc_emit_json(ctx, &length);
-    const int fd = open(emit_json, O_WRONLY | O_TRUNC | O_CREAT | WINBINARY, 0600);
-    if (fd < 0) abort();
-    if (write(fd, ret, length) != length) {
-      fprintf(stderr, "Failed to write \"%s\"\n", emit_json);
-      close(fd);
-      free(ret);
+    if (ret == NULL) {
+      fprintf(stderr, "Failed to serialize \"%s\"\n", emit_json);
+      jbig2_destroy(ctx);
       return 1;
+    }
+    const int fd = open(emit_json, O_WRONLY | O_TRUNC | O_CREAT | WINBINARY, 0600);
+    if (fd < 0) {
+      fprintf(stderr, "Unable to open \"%s\"\n", emit_json);
+      free(ret);
+      jbig2_destroy(ctx);
+      return 1;
+    }
+    ssize_t written = 0;
+    while (written < (ssize_t) length) {
+      const ssize_t n = write(fd, ret + written, (size_t) (length - written));
+      if (n <= 0) {
+        fprintf(stderr, "Failed to write \"%s\"\n", emit_json);
+        close(fd);
+        free(ret);
+        jbig2_destroy(ctx);
+        return 1;
+      }
+      written += n;
     }
     close(fd);
     free(ret);
