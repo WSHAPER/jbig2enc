@@ -74,8 +74,19 @@ def _image_size(path):
                 continue
             marker = data[i + 1]
             if marker in (
-                0xC0, 0xC1, 0xC2, 0xC3, 0xC5, 0xC6, 0xC7,
-                0xC9, 0xCA, 0xCB, 0xCD, 0xCE, 0xCF,
+                0xC0,
+                0xC1,
+                0xC2,
+                0xC3,
+                0xC5,
+                0xC6,
+                0xC7,
+                0xC9,
+                0xCA,
+                0xCB,
+                0xCD,
+                0xCE,
+                0xCF,
             ):
                 height, width = struct.unpack(">HH", data[i + 5 : i + 9])
                 return width, height
