@@ -262,6 +262,22 @@ class TestJbig2SymbolMode(unittest.TestCase):
         self.assertNotEqual(proc.returncode, 0)
         self.assertIn("symbol mode", proc.stderr.decode())
 
+    def test_emit_json_unwritable_path(self):
+        """--emit-json to an unopenable path fails instead of aborting."""
+        _require_image(TEST_IMAGE_PNG)
+        with tempfile.TemporaryDirectory() as tmp:
+            sidecar = Path(tmp) / "no-such-dir" / "x.json"
+            proc = _run_cwd(
+                tmp,
+                "--emit-json",
+                sidecar,
+                "-s",
+                "-p",
+                str(TEST_IMAGE_PNG),
+            )
+            self.assertNotEqual(proc.returncode, 0)
+            self.assertIn("Unable to open", proc.stderr.decode())
+
 
 class TestJbig2DuplicateLineRemoval(unittest.TestCase):
     """TPGD duplicate-line-removal flag."""

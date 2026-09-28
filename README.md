@@ -87,7 +87,10 @@ All coordinates are raster coordinates of the page at encode resolution: `x`
 is measured from the left edge, `y` from the top edge. For each instance,
 `ul` is the upper left corner of the template placement box and `ll` the
 lower left corner of the ink, which is the placement used by the JBIG2 text
-region coder. `symbols` holds one entry per class with the exemplar
+region coder. Both corners come from the classifier's placement arrays, and
+for a component touching the top or left crop edge the anchor can fall a
+pixel outside the page raster, so small negative values as in the sample are
+expected and not an error. `symbols` holds one entry per class with the exemplar
 dimensions in pixels. Pages that were not encoded in symbol mode report a
 zero instance count. The flag is default-off and writes only to the named
 file, leaving the stdout/stderr contract unchanged.
